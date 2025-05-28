@@ -38,7 +38,7 @@ Duckex.execute("INSTALL postgres")
 
 # Attach DuckLake source
 Duckex.execute("""
-ATTACH 'ducklake:postgres:dbname=ducklake_catalog host=127.0.0.1 port=5452 password=postgres user=postgres'
+ATTACH 'ducklake:postgres:dbname=ducklake_catalog host=127.0.0.1 port=5432 password=postgres user=postgres'
 AS my_ducklake (DATA_PATH 'data_files/')
 """)
 
