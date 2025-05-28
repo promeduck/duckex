@@ -1,0 +1,12 @@
+[package]
+name = "duckex"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22.1"
+duckdb = "1.2.2"
+eetf = "0.10.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_eetf = "0.2.0"
+serde_json = "1.0.140"
