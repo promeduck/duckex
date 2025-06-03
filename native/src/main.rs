@@ -1,10 +1,11 @@
+use base64::{Engine as _, engine::general_purpose};
 use duckdb::Connection;
-use duckdb::types::{Value, ToSql};
+use duckdb::Error;
 use duckdb::Result;
-use serde::{Serialize, Deserialize};
-use base64::{engine::general_purpose, Engine as _};
-use std::io::{self, Write, Read};
-use serde_json;
+use duckdb::params_from_iter;
+use duckdb::types::{Null, ToSql, ToSqlOutput, Value};
+use serde::{Deserialize, Serialize};
+use std::io::{self, Read, Write};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Command {
@@ -45,14 +46,25 @@ enum ErlangValue {
 //     }
 // }
 
-fn erlang_value_to_duckdb(value: &ErlangValue) -> Value {
-    match value {
-        ErlangValue::Boolean(b) => Value::Boolean(*b),
-        ErlangValue::Integer(i) => Value::BigInt(*i),
-        ErlangValue::Float(f) => Value::Double(*f),
-        ErlangValue::Text(s) => Value::Text(s.clone()),
-        ErlangValue::Null => Value::Null,
-        ErlangValue::Blob(b) => Value::Blob(general_purpose::STANDARD.decode(b).unwrap_or_default()),
+impl From<&ErlangValue> for ToSqlOutput<'_> {
+    fn from(value: &ErlangValue) -> Self {
+        match value {
+            ErlangValue::Integer(i) => ToSqlOutput::from(*i),
+            ErlangValue::Float(f) => ToSqlOutput::from(*f),
+            ErlangValue::Text(s) => ToSqlOutput::from(s.clone()),
+            ErlangValue::Boolean(b) => ToSqlOutput::from(*b),
+            ErlangValue::Null => ToSqlOutput::from(Null),
+            ErlangValue::Blob(b) => {
+                let decoded_blob = general_purpose::STANDARD.decode(b).unwrap_or_default();
+                ToSqlOutput::from(decoded_blob)
+            }
+        }
+    }
+}
+
+impl ToSql for ErlangValue {
+    fn to_sql(&self) -> Result<ToSqlOutput, Error> {
+        Ok(self.into())
     }
 }
 
@@ -82,56 +94,39 @@ fn setup_connection() -> Result<Connection, String> {
 }
 
 fn execute_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Response {
-    let params: Vec<Value> = values.iter()
-        .map(erlang_value_to_duckdb)
-        .collect();
-
-    let param_refs: Vec<&dyn ToSql> = params.iter()
-        .map(|v| v as &dyn ToSql)
-        .collect();
-
     match conn.prepare(sql) {
-        Ok(mut stmt) => {
-            match stmt.execute(param_refs.as_slice()) {
-                Ok(affected_rows) => {
-                    Response {
-                        status: "ok".to_string(),
-                        message: format!("Statement executed successfully. Affected rows: {}", affected_rows),
-                        columns: None,
-                        rows: None,
-                    }
-                },
-                Err(e) => Response {
-                    status: "error".to_string(),
-                    message: format!("SQL execution error: {}", e),
-                    columns: None,
-                    rows: None,
-                }
-            }
+        Ok(mut stmt) => match stmt.execute(params_from_iter(values)) {
+            Ok(affected_rows) => Response {
+                status: "ok".to_string(),
+                message: format!(
+                    "Statement executed successfully. Affected rows: {}",
+                    affected_rows
+                ),
+                columns: None,
+                rows: None,
+            },
+            Err(e) => Response {
+                status: "error".to_string(),
+                message: format!("SQL execution error: {}", e),
+                columns: None,
+                rows: None,
+            },
         },
         Err(e) => Response {
             status: "error".to_string(),
             message: format!("SQL preparation error: {}", e),
             columns: None,
             rows: None,
-        }
+        },
     }
 }
 
 fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Response {
-    let params: Vec<Value> = values.iter()
-        .map(erlang_value_to_duckdb)
-        .collect();
-
-    let param_refs: Vec<&dyn ToSql> = params.iter()
-        .map(|v| v as &dyn ToSql)
-        .collect();
-
     match conn.prepare(sql) {
         Ok(mut stmt) => {
-            match stmt.query_map(param_refs.as_slice(), |row| {
+            match stmt.query_map(params_from_iter(values), |row| {
                 let mut row_values = Vec::new();
-                
+
                 for i in 0.. {
                     match row.get::<_, Value>(i) {
                         Ok(val) => row_values.push(duckdb_value_to_json(&val)),
@@ -142,19 +137,21 @@ fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Resp
             }) {
                 Ok(rows) => {
                     let mut all_rows = Vec::new();
-                    
+
                     for row_result in rows {
                         match row_result {
                             Ok(row_data) => all_rows.push(row_data),
-                            Err(e) => return Response {
-                                status: "error".to_string(),
-                                message: format!("Row processing error: {}", e),
-                                columns: None,
-                                rows: None,
+                            Err(e) => {
+                                return Response {
+                                    status: "error".to_string(),
+                                    message: format!("Row processing error: {}", e),
+                                    columns: None,
+                                    rows: None,
+                                };
                             }
                         }
                     }
-                    
+
                     let column_names = stmt.column_names();
 
                     Response {
@@ -163,21 +160,21 @@ fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Resp
                         columns: Some(column_names),
                         rows: Some(all_rows),
                     }
-                },
+                }
                 Err(e) => Response {
                     status: "error".to_string(),
                     message: format!("SQL query error: {}", e),
                     columns: None,
                     rows: None,
-                }
+                },
             }
-        },
+        }
         Err(e) => Response {
             status: "error".to_string(),
             message: format!("SQL preparation error: {}", e),
             columns: None,
             rows: None,
-        }
+        },
     }
 }
 
@@ -205,55 +202,53 @@ fn main() {
         };
 
         match std::str::from_utf8(&buffer[..size]) {
-            Ok(json_str) => {
-                match serde_json::from_str::<Command>(json_str.trim()) {
-                    Ok(cmd) => {
-                        let result = if let Some(sql) = cmd.sql {
-                            match cmd.command.as_str() {
-                                "query" => query_statement(&conn, &sql, &cmd.values),
-                                "execute" => execute_statement(&conn, &sql, &cmd.values),
-                                _ => Response {
-                                    status: "error".to_string(),
-                                    message: format!("Unknown command: {}", cmd.command),
-                                    columns: None,
-                                    rows: None,
-                                }
-                            }
-                        } else {
-                            Response {
+            Ok(json_str) => match serde_json::from_str::<Command>(json_str.trim()) {
+                Ok(cmd) => {
+                    let result = if let Some(sql) = cmd.sql {
+                        match cmd.command.as_str() {
+                            "query" => query_statement(&conn, &sql, &cmd.values),
+                            "execute" => execute_statement(&conn, &sql, &cmd.values),
+                            _ => Response {
                                 status: "error".to_string(),
-                                message: "No SQL query provided".to_string(),
+                                message: format!("Unknown command: {}", cmd.command),
                                 columns: None,
                                 rows: None,
+                            },
+                        }
+                    } else {
+                        Response {
+                            status: "error".to_string(),
+                            message: "No SQL query provided".to_string(),
+                            columns: None,
+                            rows: None,
+                        }
+                    };
+
+                    match serde_json::to_string(&result) {
+                        Ok(json_response) => {
+                            if let Err(e) = stdout.write_all(json_response.as_bytes()) {
+                                eprintln!("Failed to write response: {}", e);
+                                break;
                             }
-                        };
-                        
-                        match serde_json::to_string(&result) {
-                            Ok(json_response) => {
-                                if let Err(e) = stdout.write_all(json_response.as_bytes()) {
-                                    eprintln!("Failed to write response: {}", e);
-                                    break;
-                                }
-                                if let Err(e) = stdout.write_all(b"\n") {
-                                    eprintln!("Failed to write newline: {}", e);
-                                    break;
-                                }
-                                if let Err(e) = stdout.flush() {
-                                    eprintln!("Failed to flush response: {}", e);
-                                    break;
-                                }
+                            if let Err(e) = stdout.write_all(b"\n") {
+                                eprintln!("Failed to write newline: {}", e);
+                                break;
                             }
-                            Err(e) => {
-                                eprintln!("Failed to encode JSON response: {:?}", e);
+                            if let Err(e) = stdout.flush() {
+                                eprintln!("Failed to flush response: {}", e);
                                 break;
                             }
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to decode JSON: {:?}", e);
+                        Err(e) => {
+                            eprintln!("Failed to encode JSON response: {:?}", e);
+                            break;
+                        }
                     }
                 }
-            }
+                Err(e) => {
+                    eprintln!("Failed to decode JSON: {:?}", e);
+                }
+            },
             Err(e) => {
                 eprintln!("Failed to convert buffer to UTF-8: {:?}", e);
             }
@@ -275,4 +270,3 @@ fn main() {
 
 //     Ok(())
 // }
-
