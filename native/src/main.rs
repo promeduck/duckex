@@ -22,6 +22,17 @@ struct Response {
     rows: Option<Vec<Vec<serde_json::Value>>>,
 }
 
+impl Response {
+    fn error(message: String) -> Self {
+        Response {
+            status: "error".to_string(),
+            message,
+            columns: None,
+            rows: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum ErlangValue {
     Integer(i64),
@@ -105,19 +116,9 @@ fn execute_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Re
                 columns: None,
                 rows: None,
             },
-            Err(e) => Response {
-                status: "error".to_string(),
-                message: format!("SQL execution error: {}", e),
-                columns: None,
-                rows: None,
-            },
+            Err(e) => Response::error(format!("SQL execution error: {}", e)),
         },
-        Err(e) => Response {
-            status: "error".to_string(),
-            message: format!("SQL preparation error: {}", e),
-            columns: None,
-            rows: None,
-        },
+        Err(e) => Response::error(format!("SQL preparation error: {}", e)),
     }
 }
 
@@ -142,12 +143,7 @@ fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Resp
                         match row_result {
                             Ok(row_data) => all_rows.push(row_data),
                             Err(e) => {
-                                return Response {
-                                    status: "error".to_string(),
-                                    message: format!("Row processing error: {}", e),
-                                    columns: None,
-                                    rows: None,
-                                };
+                                return Response::error(format!("Row processing error: {}", e));
                             }
                         }
                     }
@@ -161,20 +157,10 @@ fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Resp
                         rows: Some(all_rows),
                     }
                 }
-                Err(e) => Response {
-                    status: "error".to_string(),
-                    message: format!("SQL query error: {}", e),
-                    columns: None,
-                    rows: None,
-                },
+                Err(e) => Response::error(format!("SQL query error: {}", e)),
             }
         }
-        Err(e) => Response {
-            status: "error".to_string(),
-            message: format!("SQL preparation error: {}", e),
-            columns: None,
-            rows: None,
-        },
+        Err(e) => Response::error(format!("SQL preparation error: {}", e)),
     }
 }
 
@@ -208,20 +194,10 @@ fn main() {
                         match cmd.command.as_str() {
                             "query" => query_statement(&conn, &sql, &cmd.values),
                             "execute" => execute_statement(&conn, &sql, &cmd.values),
-                            _ => Response {
-                                status: "error".to_string(),
-                                message: format!("Unknown command: {}", cmd.command),
-                                columns: None,
-                                rows: None,
-                            },
+                            _ => Response::error(format!("Unknown command: {}", cmd.command)),
                         }
                     } else {
-                        Response {
-                            status: "error".to_string(),
-                            message: "No SQL query provided".to_string(),
-                            columns: None,
-                            rows: None,
-                        }
+                        Response::error("No SQL query provided".to_string())
                     };
 
                     match serde_json::to_string(&result) {
