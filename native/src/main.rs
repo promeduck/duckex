@@ -123,8 +123,9 @@ fn execute_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Re
 }
 
 fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Response {
-    let Ok(mut stmt) = conn.prepare(sql) else {
-        return Response::error(format!("SQL preparation error: {}", sql));
+    let mut stmt = match conn.prepare(sql) {
+        Ok(stmt) => stmt,
+        Err(e) => return Response::error(format!("SQL preparation error: {}\n\n{}", e, sql)),
     };
 
     let mut all_rows = Vec::new();
