@@ -123,44 +123,33 @@ fn execute_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Re
 }
 
 fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Response {
-    match conn.prepare(sql) {
-        Ok(mut stmt) => {
-            match stmt.query_map(params_from_iter(values), |row| {
-                let mut row_values = Vec::new();
+    let Ok(mut stmt) = conn.prepare(sql) else {
+        return Response::error(format!("SQL preparation error: {}", sql));
+    };
 
-                for i in 0.. {
-                    match row.get::<_, Value>(i) {
-                        Ok(val) => row_values.push(duckdb_value_to_json(&val)),
-                        Err(_) => break,
-                    }
-                }
-                Ok(row_values)
-            }) {
-                Ok(rows) => {
-                    let mut all_rows = Vec::new();
+    let mut all_rows = Vec::new();
+    let columns_count = stmt.column_count();
 
-                    for row_result in rows {
-                        match row_result {
-                            Ok(row_data) => all_rows.push(row_data),
-                            Err(e) => {
-                                return Response::error(format!("Row processing error: {}", e));
-                            }
-                        }
-                    }
-
-                    let column_names = stmt.column_names();
-
-                    Response {
-                        status: "ok".to_string(),
-                        message: "Query executed successfully".to_string(),
-                        columns: Some(column_names),
-                        rows: Some(all_rows),
-                    }
-                }
-                Err(e) => Response::error(format!("SQL query error: {}", e)),
+    let rows = stmt.query_map(params_from_iter(values), |row| {
+        let mut row_values = Vec::with_capacity(columns_count);
+        for i in 0..columns_count {
+            match row.get(i) {
+                Ok(val) => row_values.push(duckdb_value_to_json(&val)),
+                Err(e) => return Err(e),
             }
         }
-        Err(e) => Response::error(format!("SQL preparation error: {}", e)),
+        all_rows.push(row_values);
+        Ok(())
+    });
+
+    match rows {
+        Ok(_) => Response {
+            status: "ok".to_string(),
+            message: "Query executed successfully".to_string(),
+            columns: Some(stmt.column_names()),
+            rows: Some(all_rows),
+        },
+        Err(e) => Response::error(format!("SQL query error: {}\n\n{}", e, sql)),
     }
 }
 
