@@ -5,7 +5,7 @@ use duckdb::Result;
 use duckdb::params_from_iter;
 use duckdb::types::{Null, ToSql, ToSqlOutput, Value};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Command {
@@ -155,9 +155,8 @@ fn query_statement(conn: &Connection, sql: &str, values: &[ErlangValue]) -> Resp
 }
 
 fn main() {
-    let mut stdin = io::stdin();
+    let stdin = io::stdin();
     let mut stdout = io::stdout();
-    let mut buffer = [0u8; 4096];
 
     let conn = match setup_connection() {
         Ok(conn) => conn,
@@ -167,57 +166,35 @@ fn main() {
         }
     };
 
-    loop {
-        let size = match stdin.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("Error reading: {}", e);
-                break;
-            }
-        };
+    let cmd: Command = match serde_json::from_reader(stdin.lock()) {
+        Ok(c) => c,
+        Err(e) => return eprintln!("Failed to decode JSON: {:?}", e),
+    };
 
-        match std::str::from_utf8(&buffer[..size]) {
-            Ok(json_str) => match serde_json::from_str::<Command>(json_str.trim()) {
-                Ok(cmd) => {
-                    let result = if let Some(sql) = cmd.sql {
-                        match cmd.command.as_str() {
-                            "query" => query_statement(&conn, &sql, &cmd.values),
-                            "execute" => execute_statement(&conn, &sql, &cmd.values),
-                            _ => Response::error(format!("Unknown command: {}", cmd.command)),
-                        }
-                    } else {
-                        Response::error("No SQL query provided".to_string())
-                    };
+    let result = if let Some(sql) = cmd.sql {
+        match cmd.command.as_str() {
+            "query" => query_statement(&conn, &sql, &cmd.values),
+            "execute" => execute_statement(&conn, &sql, &cmd.values),
+            _ => Response::error(format!("Unknown command: {}", cmd.command)),
+        }
+    } else {
+        Response::error("No SQL query provided".to_string())
+    };
 
-                    match serde_json::to_string(&result) {
-                        Ok(json_response) => {
-                            if let Err(e) = stdout.write_all(json_response.as_bytes()) {
-                                eprintln!("Failed to write response: {}", e);
-                                break;
-                            }
-                            if let Err(e) = stdout.write_all(b"\n") {
-                                eprintln!("Failed to write newline: {}", e);
-                                break;
-                            }
-                            if let Err(e) = stdout.flush() {
-                                eprintln!("Failed to flush response: {}", e);
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to encode JSON response: {:?}", e);
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to decode JSON: {:?}", e);
-                }
-            },
-            Err(e) => {
-                eprintln!("Failed to convert buffer to UTF-8: {:?}", e);
+    match serde_json::to_string(&result) {
+        Ok(json_response) => {
+            if let Err(e) = stdout.write_all(json_response.as_bytes()) {
+                eprintln!("Failed to write response: {}", e)
             }
+            if let Err(e) = stdout.write_all(b"\n") {
+                eprintln!("Failed to write newline: {}", e)
+            }
+            if let Err(e) = stdout.flush() {
+                eprintln!("Failed to flush response: {}", e)
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to encode JSON response: {:?}", e)
         }
     }
 }
