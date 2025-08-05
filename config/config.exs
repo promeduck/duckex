@@ -3,7 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Used by "mix format"
-[
-  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
-]
+import Config
+
+if Mix.env() == :test do
+  config :logger, level: :warning
+end

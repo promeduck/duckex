@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2025 Stas Muzhyk <sts@abc3.dev>
+# SPDX-FileCopyrightText: 2025 Łukasz Niemier <~@hauleth.dev>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule Duckex.MixProject do
   use Mix.Project
 
@@ -5,47 +10,55 @@ defmodule Duckex.MixProject do
     [
       app: :duckex,
       version: "0.1.0",
-      elixir: "~> 1.18",
-      start_permanent: Mix.env() == :prod,
-      deps: deps(),
-      aliases: aliases()
-    ]
-  end
-
-  def application do
-    [
-      extra_applications: [:logger]
+      elixir: "~> 1.14",
+      compilers: [:native] ++ Mix.compilers(),
+      aliases: aliases(),
+      docs: docs(),
+      deps: deps()
     ]
   end
 
   defp deps do
     [
-      {:jason, "~> 1.4"}
+      {:db_connection, "~> 2.8"},
+      {:ex_doc, ">= 0.0.0", only: [:dev], runtime: false},
+      {:credo, ">= 0.0.0", only: [:dev], runtime: false},
+      {:dialyxir, ">= 0.0.0", only: [:dev], runtime: false}
+    ]
+  end
+
+  defp docs do
+    [
+      extras:
+        [
+          "README.md"
+        ] ++ Path.wildcard("LICENSES/*"),
+      groups_for_extras: [
+        Licenses: Path.wildcard("LICENSES/*")
+      ]
     ]
   end
 
   defp aliases do
     [
-      compile: ["compile.rust", "compile"],
-      "compile.rust": &compile_rust/1,
-      setup: ["deps.get", "compile.rust"]
+      "compile.native": &native_build/1
     ]
   end
 
-  defp compile_rust(_args) do
+  defp native_build(_args) do
     IO.puts("Building Rust native binary...")
 
     File.mkdir_p!("priv")
 
-    {result, exit_code} = System.cmd("cargo", ["build", "--release"], cd: "native")
+    {result, exit_code} = System.cmd("cargo", ["build", "--release"])
     IO.puts(result)
 
     if exit_code != 0 do
       raise "Failed to compile Rust binary"
     end
 
-    source_path = Path.join(["native", "target", "release", "duckex"])
-    dest_path = Path.join(["priv", "duckex"])
+    source_path = Path.join(["target", "release", "duckex"])
+    dest_path = Path.join(["priv", "native", "duckex"])
 
     if File.exists?(source_path) do
       File.cp!(source_path, dest_path)
