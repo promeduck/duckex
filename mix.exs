@@ -34,7 +34,6 @@ defmodule Duckex.MixProject do
       files: ~W[
         mix.exs
         lib
-        priv
         .formatter.exs
         README*
         LICENSES
